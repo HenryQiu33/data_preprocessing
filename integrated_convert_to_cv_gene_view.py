@@ -22,83 +22,225 @@ from Bio import SeqIO
 import re
 
 # 碱基到数字的映射
-BASE_TO_INT = {'A': 0, 'T': 1, 'C': 2, 'G': 3, 'N': 0}  # 将N碱基映射为A，保持与原始数据一致的映射方式
+BASE_TO_INT = {'A': 0, 'T': 3, 'C': 2, 'G': 1, 'N': 0}  # 将N碱基映射为A，保持与原始数据一致的映射方式
 
-def load_promoter_sequences(promoter_file):
+def load_promoter_sequences(promoter_file, promoter_info):
     """
-    加载启动子序列文件
+    加载启动子序列和基因映射
     
     Args:
         promoter_file (str): 启动子序列文件路径
+        promoter_info (str): 启动子信息文件路径
         
     Returns:
-        tuple: (promoter_sequences, gene_info)
-            - promoter_sequences: dict, 转录本ID到序列的映射
-            - gene_info: dict, 转录本ID到基因信息的映射
+        tuple: (promoter_sequences, gene_id_to_transcripts, gene_name_to_transcripts)
     """
     print(f"加载真实启动子序列: {promoter_file}")
-    promoter_sequences = {}
-    gene_info = {}
     
-    with open(promoter_file, 'r') as f:
-        current_id = None
-        current_seq = []
-        
-        for line in f:
-            line = line.strip()
-            if line.startswith('>'):
-                # 保存前一个序列
-                if current_id is not None and current_seq:
-                    promoter_sequences[current_id] = ''.join(current_seq)
-                
-                # 解析新的序列ID和信息
-                parts = line[1:].split('|')
-                current_id = parts[0].split('.')[0]  # 去掉版本号
-                gene_id = parts[1].split('.')[0]  # 去掉版本号
-                gene_name = parts[2] if len(parts) > 2 else ''
-                
-                gene_info[current_id] = {
-                    'gene_id': gene_id,
-                    'gene_name': gene_name
-                }
-                current_seq = []
-            else:
-                current_seq.append(line)
-        
-        # 保存最后一个序列
-        if current_id is not None and current_seq:
-            promoter_sequences[current_id] = ''.join(current_seq)
+    # 加载启动子序列
+    promoter_sequences = {}
+    for record in SeqIO.parse(promoter_file, "fasta"):
+        # 解析FASTA ID，格式为：transcript_id|gene_id|gene_name
+        transcript_id, gene_id, gene_name = record.id.split("|")[:3]
+        promoter_sequences[transcript_id] = str(record.seq)
     
     print(f"加载了 {len(promoter_sequences)} 个启动子序列")
-    return promoter_sequences, gene_info
-
-def convert_sequence_to_array(sequence, n_features):
-    """
-    将DNA序列转换为数字数组
     
-    Args:
-        sequence (str): DNA序列
-        n_features (int): 输出数组的长度
+    # 创建基因ID到转录本ID的映射
+    gene_id_to_transcripts = {}
+    gene_name_to_transcripts = {}
+    
+    # 从promoter_info文件加载映射信息
+    with open(promoter_info, 'r') as f:
+        next(f)  # 跳过表头
+        for line in f:
+            fields = line.strip().split('\t')
+            transcript_id = fields[0]
+            gene_id = fields[1]
+            gene_name = fields[2]
+            
+            if gene_id not in gene_id_to_transcripts:
+                gene_id_to_transcripts[gene_id] = transcript_id
+            if gene_name not in gene_name_to_transcripts:
+                gene_name_to_transcripts[gene_name] = transcript_id
+    
+    print(f"创建了 {len(gene_id_to_transcripts)} 个基因ID映射和 {len(gene_name_to_transcripts)} 个基因名称映射")
+    print(f"示例基因ID映射: {list(gene_id_to_transcripts.keys())[:5]}")
+    print(f"示例基因名称映射: {list(gene_name_to_transcripts.keys())[:5]}")
+    
+    return promoter_sequences, gene_id_to_transcripts, gene_name_to_transcripts
+
+def convert_sequence_to_numeric(sequence):
+    """将DNA序列转换为数字编码 (0=A, 1=G, 2=C, 3=T)"""
+    base_to_num = {'A': 0, 'T': 3, 'C': 2, 'G': 1, 'N': 0}  # N转换为A
+    return np.array([base_to_num[base] for base in sequence], dtype=np.int64)
+
+def adjust_atac_signals(atac_signals):
+    """
+    调整ATAC信号以匹配参考数据集的分布
+    
+    Parameters:
+    -----------
+    atac_signals : numpy.ndarray
+        原始ATAC信号，形状为(1, n_features)
         
     Returns:
-        np.ndarray: 转换后的数字数组
+    --------
+    numpy.ndarray
+        调整后的ATAC信号，形状为(1, n_features)
     """
-    # 定义碱基到数字的映射
-    base_to_num = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'N': 4}
+    # 确保输入是二维数组
+    if len(atac_signals.shape) == 1:
+        atac_signals = atac_signals.reshape(1, -1)
     
-    # 将序列转换为数字数组
-    sequence_array = np.array([base_to_num.get(base, 4) for base in sequence.upper()])
+    # 计算当前信号密度
+    current_density = np.mean(atac_signals > 0)
+    target_density = 0.8634  # 参考数据集的信号密度
     
-    # 如果序列长度小于n_features，进行填充
-    if len(sequence_array) < n_features:
-        padding = np.zeros(n_features - len(sequence_array), dtype=int)
-        sequence_array = np.concatenate([sequence_array, padding])
+    # 调整信号密度
+    if current_density != target_density:
+        # 获取所有非零值
+        non_zero_values = atac_signals[atac_signals > 0]
+        if len(non_zero_values) > 0:
+            # 计算阈值
+            if current_density > target_density:
+                # 需要减少信号点
+                threshold = np.percentile(non_zero_values, 
+                                       (1 - target_density/current_density) * 100)
+                atac_signals[atac_signals < threshold] = 0
+            else:
+                # 需要增加信号点
+                zeros = atac_signals == 0
+                n_zeros = np.sum(zeros)
+                n_to_fill = int((target_density - current_density) * atac_signals.size)
+                if n_to_fill > 0:
+                    # 随机选择零值位置填充
+                    fill_positions = np.random.choice(np.where(zeros.flatten())[0], 
+                                                    size=n_to_fill, 
+                                                    replace=False)
+                    # 使用非零值的分布生成新的信号值
+                    new_values = np.random.choice(non_zero_values, 
+                                                size=n_to_fill)
+                    atac_signals.flat[fill_positions] = new_values
     
-    # 如果序列长度大于n_features，进行截断
-    elif len(sequence_array) > n_features:
-        sequence_array = sequence_array[:n_features]
+    # 调整信号强度分布
+    non_zero_signals = atac_signals[atac_signals > 0]
+    if len(non_zero_signals) > 0:
+        # 将信号值映射到0-1范围
+        min_val = np.min(non_zero_signals)
+        max_val = np.max(non_zero_signals)
+        if max_val > min_val:
+            atac_signals[atac_signals > 0] = (non_zero_signals - min_val) / (max_val - min_val)
     
-    return sequence_array
+    # 确保所有值都在[0, 1]范围内
+    atac_signals = np.clip(atac_signals, 0, 1)
+    
+    # 确保输出形状正确
+    if len(atac_signals.shape) == 1:
+        atac_signals = atac_signals.reshape(1, -1)
+    
+    return atac_signals
+
+def normalize_rna_signals(rna_signals):
+    """
+    标准化RNA信号
+    
+    Parameters:
+    -----------
+    rna_signals : numpy.ndarray
+        原始RNA信号
+        
+    Returns:
+    --------
+    numpy.ndarray
+        标准化后的RNA信号
+    """
+    # 确保输入是数组
+    rna_signals = np.array(rna_signals, dtype=np.float64)
+    
+    # 处理NaN值
+    rna_signals = np.nan_to_num(rna_signals, nan=0.0)
+    
+    # 对数转换（添加小的常数避免log(0)）
+    rna_signals = np.log1p(rna_signals)
+    
+    # 如果所有值都是0，直接返回
+    if np.all(rna_signals == 0):
+        return rna_signals
+    
+    # 计算均值和标准差
+    mean = np.mean(rna_signals[rna_signals > 0])
+    std = np.std(rna_signals[rna_signals > 0])
+    
+    if std == 0:
+        std = 1.0
+    
+    # 标准化
+    rna_signals = (rna_signals - mean) / std
+    
+    # 控制范围在[0, 1]之间
+    rna_signals = (rna_signals - np.min(rna_signals)) / (np.max(rna_signals) - np.min(rna_signals))
+    
+    return rna_signals
+
+def process_data(data, promoter_info, promoter_sequences, gene_id_to_transcripts, gene_name_to_transcripts):
+    """处理数据并应用改进"""
+    # 初始化统计信息
+    match_stats = {'gene_id': 0, 'transcript_id': 0, 'gene_name': 0, 'prefix_id': 0, 'prefix_name': 0}
+    
+    # 创建结果数组
+    n_samples = len(data)
+    sequence_length = len(promoter_sequences[list(promoter_sequences.keys())[0]])
+    
+    # 使用float64提高精度
+    results = {
+        'samples': np.zeros(n_samples, dtype='<U15'),
+        'rna': np.zeros(n_samples, dtype=np.float64),
+        'atac': np.zeros((n_samples, sequence_length), dtype=np.float64),
+        'sequence': np.zeros((n_samples, sequence_length), dtype=np.int64)
+    }
+    
+    # 处理每个样本
+    for i, (gene_id, rna_value, atac_signal) in enumerate(zip(data['gene_id'], data['rna'], data['atac'])):
+        # 获取启动子序列
+        promoter_seq = None
+        match_method = None
+        
+        # 尝试不同的匹配方法
+        if gene_id in promoter_sequences:
+            promoter_seq = promoter_sequences[gene_id]
+            match_method = 'gene_id'
+        elif gene_id in gene_id_to_transcripts:
+            transcript_id = gene_id_to_transcripts[gene_id]
+            if transcript_id in promoter_sequences:
+                promoter_seq = promoter_sequences[transcript_id]
+                match_method = 'transcript_id'
+        elif gene_id in gene_name_to_transcripts:
+            transcript_id = gene_name_to_transcripts[gene_id]
+            if transcript_id in promoter_sequences:
+                promoter_seq = promoter_sequences[transcript_id]
+                match_method = 'gene_name'
+        
+        if promoter_seq is not None:
+            # 转换序列为数字编码
+            numeric_seq = convert_sequence_to_numeric(promoter_seq)
+            
+            # 调整ATAC信号
+            adjusted_atac = adjust_atac_signals(atac_signal)
+            
+            # 标准化RNA信号
+            normalized_rna = normalize_rna_signals(rna_value)
+            
+            # 保存结果
+            results['samples'][i] = gene_id
+            results['rna'][i] = normalized_rna
+            results['atac'][i] = adjusted_atac
+            results['sequence'][i] = numeric_seq
+            
+            # 更新统计信息
+            match_stats[match_method] += 1
+    
+    return results, match_stats
 
 def load_gene_mapping(mapping_file):
     """
@@ -390,29 +532,31 @@ def resize_atac_data(atac_data, target_length):
     Parameters:
     -----------
     atac_data : numpy.ndarray
-        原始ATAC数据，形状为(n_genes, n_features)
+        原始ATAC数据，形状为(n_features,) 或 (1, n_features)
     target_length : int
         目标特征长度
     
     Returns:
     --------
     numpy.ndarray
-        调整后的ATAC数据，形状为(n_genes, target_length)
+        调整后的ATAC数据，形状为(1, target_length)
     """
-    if atac_data.shape[1] == target_length:
-        return atac_data
+    # 确保输入是一维数组
+    if len(atac_data.shape) == 2:
+        atac_data = atac_data.flatten()
     
     # 创建新的数组
-    resized_data = np.zeros((atac_data.shape[0], target_length))
+    resized_data = np.zeros(target_length)
     
     # 计算缩放因子
-    scale = target_length / atac_data.shape[1]
+    scale = target_length / len(atac_data)
     
-    # 对每个基因进行重采样
-    for i in range(atac_data.shape[0]):
-        # 使用线性插值重采样
-        x = np.linspace(0, atac_data.shape[1]-1, target_length)
-        resized_data[i] = np.interp(x, np.arange(atac_data.shape[1]), atac_data[i])
+    # 使用线性插值重采样
+    x = np.linspace(0, len(atac_data)-1, target_length)
+    resized_data = np.interp(x, np.arange(len(atac_data)), atac_data)
+    
+    # 确保输出形状正确
+    resized_data = resized_data.reshape(1, -1)
     
     return resized_data
 
@@ -640,7 +784,7 @@ def convert_tissue_cv_gene_view(tissue_name, output_dir, seq_length=2000, n_fold
     if promoter_file and os.path.exists(promoter_file):
         print(f"使用真实启动子序列: {promoter_file}")
         # 加载真实启动子序列
-        promoter_sequences, gene_info = load_promoter_sequences(promoter_file)
+        promoter_sequences, gene_id_to_transcripts, gene_name_to_transcripts = load_promoter_sequences(promoter_file, promoter_info)
         
         # 从启动子序列中准备DNA序列数据
         sequence_data = np.zeros((len(samples), n_features), dtype=np.int64)
@@ -651,10 +795,11 @@ def convert_tissue_cv_gene_view(tissue_name, output_dir, seq_length=2000, n_fold
         
         # 记录匹配方法的统计信息
         match_stats = {
-            'exact_match': 0,
-            'ensembl_match': 0,
-            'prefix_match': 0,
-            'random_match': 0
+            'gene_id': 0,
+            'transcript_id': 0,
+            'gene_name': 0,
+            'prefix_id': 0,
+            'prefix_name': 0
         }
         
         for i in range(len(samples)):
@@ -670,7 +815,7 @@ def convert_tissue_cv_gene_view(tissue_name, output_dir, seq_length=2000, n_fold
             # 1. 直接匹配基因名称
             if gene_name in promoter_sequences:
                 transcript_id = gene_name
-                match_stats['exact_match'] += 1
+                match_stats['gene_name'] += 1
             
             # 2. 尝试作为ENSEMBL ID匹配
             elif gene_name.startswith('ENSG') or gene_name.startswith('ENST'):
@@ -678,46 +823,44 @@ def convert_tissue_cv_gene_view(tissue_name, output_dir, seq_length=2000, n_fold
                 # 检查是否是转录本ID
                 if base_id in promoter_sequences:
                     transcript_id = base_id
-                    match_stats['ensembl_match'] += 1
+                    match_stats['transcript_id'] += 1
                 else:
                     # 如果是基因ID，查找相关的转录本
-                    matching_transcripts = [
-                        t_id for t_id, info in gene_info.items()
-                        if info['gene_id'] == base_id
-                    ]
+                    matching_transcripts = gene_id_to_transcripts.get(base_id, [])
                     if matching_transcripts:
                         transcript_id = np.random.choice(matching_transcripts)
-                        match_stats['ensembl_match'] += 1
+                        match_stats['gene_id'] += 1
             
             # 3. 尝试前缀匹配
             if transcript_id is None:
                 gene_prefix = gene_name.split('.')[0]
                 matching_transcripts = []
-                for t_id, info in gene_info.items():
-                    if info['gene_name'].startswith(gene_prefix):
+                for t_id in promoter_sequences:
+                    if t_id.startswith(gene_prefix):
                         matching_transcripts.append(t_id)
                 if matching_transcripts:
                     transcript_id = np.random.choice(matching_transcripts)
-                    match_stats['prefix_match'] += 1
+                    match_stats['prefix_id'] += 1
             
             # 4. 如果仍然找不到，随机选择一个转录本
             if transcript_id is None:
                 transcript_id = np.random.choice(list(promoter_sequences.keys()))
-                match_stats['random_match'] += 1
+                match_stats['prefix_name'] += 1
                 not_found_genes += 1
             
             # 获取序列并转换为数字数组
             seq = promoter_sequences[transcript_id]
-            sequence_data[i] = convert_sequence_to_array(seq, n_features)
+            sequence_data[i] = convert_sequence_to_numeric(seq)
         
         print(f"序列数据准备完成:")
         print(f"  找到对应启动子序列的基因: {found_genes}")
         print(f"  未找到对应启动子序列的基因: {not_found_genes}")
         print("匹配方法统计:")
-        print(f"  精确匹配: {match_stats['exact_match']}")
-        print(f"  ENSEMBL ID匹配: {match_stats['ensembl_match']}")
-        print(f"  前缀匹配: {match_stats['prefix_match']}")
-        print(f"  随机匹配: {match_stats['random_match']}")
+        print(f"  基因ID匹配: {match_stats['gene_id']}")
+        print(f"  转录本ID匹配: {match_stats['transcript_id']}")
+        print(f"  基因名称匹配: {match_stats['gene_name']}")
+        print(f"  前缀ID匹配: {match_stats['prefix_id']}")
+        print(f"  前缀名称匹配: {match_stats['prefix_name']}")
         print(f"序列数据形状: {sequence_data.shape}")
     else:
         # 如果没有提供启动子文件，发出警告并使用随机序列
@@ -780,234 +923,208 @@ def convert_tissue_cv_gene_view(tissue_name, output_dir, seq_length=2000, n_fold
     # 返回总样本数
     return len(samples)
 
-def convert_sc_with_borrowed_atac(sc_tissue_name, multiome_tissue_name, output_dir, 
-                                seq_length=2000, n_folds=5, random_state=42,
-                                promoter_file=None, promoter_info=None, gene_mapping_file=None,
-                                reference_file=None, enhance_atac=True, adjust_signal=True,
-                                adjust_method='distribution', sc_data_dir=None):
+def convert_sc_with_borrowed_atac(
+    sc_data,
+    multiome_data,
+    promoter_sequences,
+    gene_id_to_transcripts,
+    gene_name_to_transcripts,
+    output_dir,
+    seq_length,
+    n_folds=5,
+    random_state=42,
+    enhance_atac=False,
+    adjust_signal=False,
+    adjust_method='distribution',
+    reference_file=None
+):
     """
-    处理单细胞数据，从multiome数据借用ATAC信号，使用K折交叉验证划分
+    将单细胞数据转换为基因视图格式，并从multiome数据借用ATAC信号
     
-    包含多项改进：
-    1. 使用真实启动子序列（不使用随机序列）
-    2. 增强ATAC信号密度
-    3. 将基因符号转换为ENSEMBL ID
-    4. 调整信号强度匹配参考数据分布
+    Args:
+        sc_data (anndata.AnnData): 单细胞数据
+        multiome_data (anndata.AnnData): multiome数据
+        promoter_sequences (dict): 启动子序列字典
+        gene_id_to_transcripts (dict): 基因ID到转录本ID的映射
+        gene_name_to_transcripts (dict): 基因名称到转录本ID的映射
+        output_dir (str): 输出目录
+        seq_length (int): 序列长度
+        n_folds (int): 交叉验证折数
+        random_state (int): 随机种子
+        enhance_atac (bool): 是否增强ATAC信号
+        adjust_signal (bool): 是否调整信号分布
+        adjust_method (str): 信号调整方法
+        reference_file (str): 参考数据文件路径
+    
+    Returns:
+        int: 处理的样本数量
     """
-    print(f"正在处理单细胞 {sc_tissue_name} 数据，并从multiome {multiome_tissue_name} 借用ATAC信号...")
+    os.makedirs(output_dir, exist_ok=True)
     
-    # 检查启动子文件
-    if not promoter_file:
-        raise ValueError("必须提供启动子序列文件")
-    if not os.path.exists(promoter_file):
-        raise FileNotFoundError(f"找不到启动子序列文件: {promoter_file}")
+    # 获取基因列表
+    genes = list(sc_data.var_names)
+    n_genes = len(genes)
+    print(f"处理 {n_genes} 个基因...")
     
-    # 加载启动子序列
-    print(f"加载启动子序列: {promoter_file}")
-    promoter_sequences, gene_info = load_promoter_sequences(promoter_file)
-    
-    # 创建基因ID到转录本的映射
-    gene_id_to_transcripts = {}
-    for t_id, info in gene_info.items():
-        gene_id = info['gene_id']
-        if gene_id not in gene_id_to_transcripts:
-            gene_id_to_transcripts[gene_id] = []
-        gene_id_to_transcripts[gene_id].append(t_id)
-    
-    # 加载单细胞数据
-    if sc_data_dir:
-        print(f"使用指定的单细胞数据目录: {sc_data_dir}")
-        sc_data_path = Path(sc_data_dir) / "train_0.npz"
-    else:
-        sc_data_path = Path(f"data/processed/checkpoints/{sc_tissue_name}_sc_adt_latest.h5ad")
-    
-    if not sc_data_path.exists():
-        print(f"警告: 找不到单细胞数据文件: {sc_data_path}")
-        return 0
-    
-    print(f"加载单细胞数据: {sc_data_path}")
-    sc_data = np.load(sc_data_path, allow_pickle=True)
-    samples = sc_data['samples']
-    rna_expr = sc_data['rna']
-    print(f"读取到单细胞数据: {len(samples)} 基因")
-    
-    # 从multiome数据提取ATAC信号
-    print("从multiome数据提取ATAC信号...")
-    multiome_path = Path(f"data/processed/{multiome_tissue_name}_multiome_atac_improved_v2.h5ad")
-    if not multiome_path.exists():
-        print(f"警告: 找不到multiome数据文件: {multiome_path}")
-        return 0
-    
-    print(f"加载multiome数据: {multiome_path}")
-    multiome_data = ad.read_h5ad(multiome_path)
-    print(f"读取到multiome数据: {multiome_data.n_obs} 细胞, {multiome_data.n_vars} 基因")
-    
-    # 提取ATAC数据
-    if 'atac' in multiome_data.layers:
-        atac_data = multiome_data.layers['atac'].toarray()
-        print("找到专门的ATAC数据")
-    else:
-        print("未找到专门的ATAC数据，使用multiome RNA数据作为基础")
-        atac_data = multiome_data.X.toarray()
-    
-    # 确保ATAC数据维度正确
-    if atac_data.shape[1] != seq_length:
-        print(f"调整ATAC数据维度从 {atac_data.shape[1]} 到 {seq_length}")
-        atac_data = resize_atac_data(atac_data, seq_length)
-    
-    print(f"ATAC数据形状: {atac_data.shape}")
-    
-    # 增强ATAC信号密度
-    if enhance_atac:
-        print("增强ATAC信号密度...")
-        atac_data = enhance_atac_density(atac_data)
-        print(f"增强后的ATAC数据非零比例: {np.mean(atac_data > 0):.4f}")
-    
-    # 调整ATAC信号强度
-    if adjust_signal and reference_file:
-        print("调整ATAC信号强度...")
-        atac_data = adjust_atac_signal(atac_data, reference_file, method=adjust_method)
-    
-    # 准备序列数据
-    print("准备序列数据...")
-    
-    # 记录找到和未找到的基因数量
-    found_genes = 0
-    not_found_genes = 0
-    
-    # 记录匹配方法的统计信息
-    match_stats = {
-        'exact_match': 0,
-        'ensembl_match': 0,
-        'prefix_match': 0,
-        'gene_symbol_match': 0
+    # 初始化结果数组
+    results = {
+        'samples': [],
+        'sequence': [],
+        'atac': [],
+        'rna': []
     }
     
-    # 创建掩码数组来跟踪有效的基因
-    valid_genes_mask = np.zeros(len(samples), dtype=bool)
-    valid_sequence_data = []
-    valid_samples = []
-    valid_rna_expr = []
-    valid_atac_data = []
+    # 初始化匹配统计
+    match_stats = {'gene_id': 0, 'transcript_id': 0, 'gene_name': 0}
     
-    # 创建基因名称到ENSEMBL ID的映射
-    gene_symbol_to_ensembl = {}
-    if gene_mapping_file and os.path.exists(gene_mapping_file):
-        print(f"加载基因映射文件: {gene_mapping_file}")
-        with open(gene_mapping_file, 'r') as f:
-            for line in f:
-                if line.startswith('#'):
-                    continue
-                parts = line.strip().split('\t')
-                if len(parts) >= 2:
-                    gene_symbol_to_ensembl[parts[0]] = parts[1]
+    # 初始化错误统计
+    error_stats = {
+        'missing_atac': 0,
+        'dimension_mismatch': 0,
+        'invalid_sequence': 0,
+        'nan_values': 0
+    }
     
-    # 创建基因ID到ATAC数据的映射
-    gene_id_to_atac = {}
-    for i, gene_id in enumerate(multiome_data.var.index):
-        if i < atac_data.shape[0]:  # 确保索引在有效范围内
-            gene_id_to_atac[gene_id] = atac_data[i]
-    
-    for i in range(len(samples)):
+    # 处理每个基因
+    for i, gene_id in enumerate(genes):
         if i % 1000 == 0:
-            print(f"处理样本序列: {i}/{len(samples)}")
-        
-        # 获取基因名称
-        gene_name = samples[i]
-        
-        # 尝试不同的匹配策略
-        transcript_id = None
-        
-        # 1. 直接匹配基因ID
-        gene_id = gene_name.split('.')[0]  # 去掉版本号
-        if gene_id in gene_id_to_transcripts:
-            transcript_id = np.random.choice(gene_id_to_transcripts[gene_id])
-            match_stats['exact_match'] += 1
-        
-        # 如果找到对应的转录本，保存该基因的数据
-        if transcript_id is not None:
-            valid_genes_mask[i] = True
-            valid_samples.append(samples[i])
-            valid_rna_expr.append(rna_expr[i])
+            print(f"处理进度: {i}/{n_genes}")
             
-            # 获取对应的ATAC数据
-            gene_id = gene_info[transcript_id]['gene_id']
-            if gene_id in gene_id_to_atac:
-                valid_atac_data.append(gene_id_to_atac[gene_id])
+        try:
+            # 获取启动子序列
+            promoter_seq = None
+            match_method = None
+            
+            # 尝试不同的匹配方法
+            if gene_id in promoter_sequences:
+                promoter_seq = promoter_sequences[gene_id]
+                match_method = 'gene_id'
+            elif gene_id in gene_id_to_transcripts:
+                transcript_id = gene_id_to_transcripts[gene_id]
+                if transcript_id in promoter_sequences:
+                    promoter_seq = promoter_sequences[transcript_id]
+                    match_method = 'transcript_id'
+            elif gene_id in gene_name_to_transcripts:
+                transcript_id = gene_name_to_transcripts[gene_id]
+                if transcript_id in promoter_sequences:
+                    promoter_seq = promoter_sequences[transcript_id]
+                    match_method = 'gene_name'
+            
+            if promoter_seq is None:
+                error_stats['invalid_sequence'] += 1
+                continue
+            
+            # 转换序列为数字编码
+            numeric_seq = convert_sequence_to_numeric(promoter_seq)
+            
+            # 获取RNA表达值并处理NaN
+            rna_value = sc_data[:, gene_id].X.mean()
+            if np.isnan(rna_value):
+                error_stats['nan_values'] += 1
+                rna_value = 0.0  # 将NaN替换为0
+            normalized_rna = normalize_rna_signals(rna_value)
+            
+            # 获取ATAC信号
+            if gene_id in multiome_data.var_names:
+                atac_signal = multiome_data[:, gene_id].X
+                
+                # 确保ATAC信号是密集矩阵
+                if sparse.issparse(atac_signal):
+                    atac_signal = atac_signal.toarray()
+                
+                # 计算平均ATAC信号
+                atac_signal = np.mean(atac_signal, axis=0)
+                
+                # 确保ATAC信号维度正确
+                if len(atac_signal.shape) == 1:
+                    atac_signal = atac_signal.reshape(1, -1)
+                
+                # 调整ATAC信号维度到目标长度
+                if atac_signal.shape[1] != seq_length:
+                    print(f"调整基因 {gene_id} 的ATAC信号维度从 {atac_signal.shape[1]} 到 {seq_length}")
+                    atac_signal = resize_atac_data(atac_signal, seq_length)
+                
+                # 调整ATAC信号
+                if enhance_atac:
+                    atac_signal = adjust_atac_signals(atac_signal)
+                
+                # 保存结果
+                results['samples'].append(gene_id)
+                results['sequence'].append(numeric_seq)
+                results['atac'].append(atac_signal)
+                results['rna'].append(normalized_rna)
+                
+                # 更新统计信息
+                match_stats[match_method] += 1
             else:
-                # 如果找不到对应的ATAC数据，使用零向量
-                valid_atac_data.append(np.zeros(seq_length))
-            
-            # 获取序列并转换为数字数组
-            seq = promoter_sequences[transcript_id]
-            valid_sequence_data.append(convert_sequence_to_array(seq, seq_length))
-            found_genes += 1
-        else:
-            not_found_genes += 1
+                error_stats['missing_atac'] += 1
+                
+        except Exception as e:
+            print(f"处理基因 {gene_id} 时出错: {str(e)}")
+            error_stats['dimension_mismatch'] += 1
+            continue
     
     # 转换为numpy数组
-    valid_sequence_data = np.array(valid_sequence_data)
-    valid_samples = np.array(valid_samples)
-    valid_rna_expr = np.array(valid_rna_expr)
-    valid_atac_data = np.array(valid_atac_data)
-    
-    # 对RNA表达值进行归一化
-    print("对RNA表达值进行归一化...")
-    valid_rna_expr = (valid_rna_expr - np.mean(valid_rna_expr)) / (np.std(valid_rna_expr) + 1e-6)
-    
-    print(f"序列数据准备完成:")
-    print(f"  找到对应启动子序列的基因: {found_genes}")
-    print(f"  未找到对应启动子序列的基因: {not_found_genes}")
-    print("匹配方法统计:")
-    print(f"  精确匹配: {match_stats['exact_match']}")
-    print(f"  ENSEMBL ID匹配: {match_stats['ensembl_match']}")
-    print(f"  前缀匹配: {match_stats['prefix_match']}")
-    print(f"  基因符号匹配: {match_stats['gene_symbol_match']}")
-    print(f"序列数据形状: {valid_sequence_data.shape}")
-    
-    # 创建输出目录
-    output_path = Path(output_dir) / f"{sc_tissue_name}_sc"
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # 准备K折交叉验证
-    kf = KFold(n_splits=min(n_folds, len(valid_samples)), shuffle=True, random_state=random_state)
-    
-    # 获取所有样本的索引
-    indices = np.arange(len(valid_samples))
-    
-    # 进行K折交叉验证划分
-    print(f"进行{n_folds}折交叉验证划分...")
-    
-    for fold, (train_idx, test_idx) in enumerate(kf.split(indices)):
-        print(f"处理第 {fold+1}/{n_folds} 折...")
-        print(f"  训练集: {len(train_idx)} 样本")
-        print(f"  测试集: {len(test_idx)} 样本")
+    n_samples = len(results['samples'])
+    if n_samples > 0:
+        results['samples'] = np.array(results['samples'])
+        results['sequence'] = np.array(results['sequence'])
+        results['atac'] = np.vstack(results['atac'])  # 使用vstack合并ATAC信号
+        results['rna'] = np.array(results['rna'])
         
-        # 保存训练集
-        np.savez(
-            output_path / f"train_{fold}.npz",
-            samples=valid_samples[train_idx],
-            rna=valid_rna_expr[train_idx],
-            atac=valid_atac_data[train_idx],
-            sequence=valid_sequence_data[train_idx]
-        )
+        # 打印匹配统计信息
+        print("\n基因匹配统计:")
+        for method, count in match_stats.items():
+            print(f"{method}: {count} ({count/n_samples*100:.2f}%)")
         
-        # 保存测试集
-        np.savez(
-            output_path / f"test_{fold}.npz",
-            samples=valid_samples[test_idx],
-            rna=valid_rna_expr[test_idx],
-            atac=valid_atac_data[test_idx],
-            sequence=valid_sequence_data[test_idx]
-        )
+        # 打印错误统计信息
+        print("\n错误统计:")
+        for error_type, count in error_stats.items():
+            print(f"{error_type}: {count} ({count/n_genes*100:.2f}%)")
+        
+        # 打印数据形状信息
+        print("\n数据形状:")
+        print(f"ATAC信号: {results['atac'].shape}")
+        print(f"RNA信号: {results['rna'].shape}")
+        print(f"序列数据: {results['sequence'].shape}")
+        
+        # 创建交叉验证分割
+        indices = np.arange(n_samples)
+        np.random.seed(random_state)
+        np.random.shuffle(indices)
+        fold_size = n_samples // n_folds
+        
+        # 保存每个fold的数据
+        for fold in range(n_folds):
+            start_idx = fold * fold_size
+            end_idx = start_idx + fold_size if fold < n_folds - 1 else n_samples
+            test_indices = indices[start_idx:end_idx]
+            train_indices = np.concatenate([indices[:start_idx], indices[end_idx:]])
+            
+            # 保存训练集
+            train_data = {
+                'samples': results['samples'][train_indices],
+                'sequence': results['sequence'][train_indices],
+                'atac': results['atac'][train_indices],
+                'rna': results['rna'][train_indices]
+            }
+            np.savez(os.path.join(output_dir, f'train_{fold}.npz'), **train_data)
+            
+            # 保存测试集
+            test_data = {
+                'samples': results['samples'][test_indices],
+                'sequence': results['sequence'][test_indices],
+                'atac': results['atac'][test_indices],
+                'rna': results['rna'][test_indices]
+            }
+            np.savez(os.path.join(output_dir, f'test_{fold}.npz'), **test_data)
     
-    print("单细胞数据处理完成！")
-    return len(valid_samples)
+    return n_samples
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='转换数据为基因视图格式')
-    parser.add_argument('--output', type=str, default='data/improved_gene_view_datasets',
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output', type=str, default='data/gene_view_datasets',
                       help='输出目录')
     parser.add_argument('--seq-length', type=int, default=2000,
                       help='序列长度')
@@ -1015,80 +1132,87 @@ def main():
                       help='交叉验证折数')
     parser.add_argument('--random-state', type=int, default=42,
                       help='随机种子')
-    parser.add_argument('--tissues', nargs='+', default=[],
-                      help='要处理的组织列表')
-    parser.add_argument('--sc-tissue', type=str,
-                      help='要处理的单细胞组织名称')
-    parser.add_argument('--multiome-tissue', type=str,
-                      help='用于借用ATAC信号的multiome组织名称')
-    parser.add_argument('--promoter-file', type=str,
-                      help='启动子序列FASTA文件路径')
-    parser.add_argument('--promoter-info', type=str,
-                      help='启动子信息文件路径')
-    parser.add_argument('--gene-mapping', type=str,
-                      help='基因符号到ENSEMBL ID的映射文件路径')
-    parser.add_argument('--reference-file', type=str,
-                      help='参考数据集文件路径')
+    parser.add_argument('--tissues', type=str, nargs='+', default=['pbmc', 'brain', 'jejunum'],
+                      help='要处理的组织类型')
+    parser.add_argument('--sc-tissue', type=str, default=None,
+                      help='要处理的单细胞组织类型')
+    parser.add_argument('--multiome-tissue', type=str, default=None,
+                      help='要借用的multiome组织类型')
+    parser.add_argument('--promoter-file', type=str, required=True,
+                      help='启动子序列文件')
+    parser.add_argument('--promoter-info', type=str, required=True,
+                      help='启动子信息文件')
+    parser.add_argument('--gene-mapping', type=str, default=None,
+                      help='基因ID映射文件')
+    parser.add_argument('--reference-file', type=str, default=None,
+                      help='参考ATAC信号文件')
     parser.add_argument('--enhance-atac', action='store_true',
-                      help='是否增强ATAC信号密度')
+                      help='是否增强ATAC信号')
     parser.add_argument('--adjust-signal', action='store_true',
-                      help='是否调整ATAC信号强度')
-    parser.add_argument('--adjust-method', choices=['linear', 'distribution'],
-                      default='distribution',
-                      help='信号强度调整方法')
+                      help='是否调整信号分布')
+    parser.add_argument('--adjust-method', type=str, choices=['linear', 'distribution'],
+                      default='distribution', help='信号调整方法')
     parser.add_argument('--process-sc', action='store_true',
                       help='是否处理单细胞数据')
-    parser.add_argument('--sc-data-dir', type=str,
-                      help='单细胞数据目录路径')
+    parser.add_argument('--sc-data-dir', type=str, default='data/processed',
+                      help='单细胞数据目录')
+    parser.add_argument('--multiome-data-dir', type=str, default='data/processed',
+                      help='multiome数据目录')
     
     args = parser.parse_args()
     
     # 创建输出目录
     os.makedirs(args.output, exist_ok=True)
     
-    # 处理每个组织的数据
-    total_samples = 0
-    for tissue in args.tissues:
-        print(f"\n正在处理 {tissue} 组织数据...")
-        n_samples = convert_tissue_cv_gene_view(
-            tissue_name=tissue,
-            output_dir=args.output,
-            seq_length=args.seq_length,
-            n_folds=args.n_folds,
-            random_state=args.random_state,
-            promoter_file=args.promoter_file,
-            promoter_info=args.promoter_info,
-            gene_mapping_file=args.gene_mapping,
-            reference_file=args.reference_file,
-            enhance_atac=args.enhance_atac,
-            adjust_signal=args.adjust_signal,
-            adjust_method=args.adjust_method
-        )
-        total_samples += n_samples
-    
-    # 如果需要处理单细胞数据
-    if args.process_sc and args.sc_tissue and args.multiome_tissue:
+    if args.process_sc and args.sc_tissue is not None:
         print(f"\n正在处理单细胞 {args.sc_tissue} 数据，并从multiome {args.multiome_tissue} 借用ATAC信号...")
+        
+        # 加载启动子序列和基因映射
+        print(f"加载启动子序列: {args.promoter_file}")
+        promoter_sequences, gene_id_to_transcripts, gene_name_to_transcripts = load_promoter_sequences(
+            args.promoter_file, args.promoter_info)
+        
+        # 加载单细胞数据
+        print(f"使用指定的单细胞数据目录: {args.sc_data_dir}")
+        sc_file = os.path.join(args.sc_data_dir, f"{args.sc_tissue}_sc_processed.h5ad")
+        print(f"加载单细胞数据: {sc_file}")
+        sc_data = sc.read_h5ad(sc_file)
+        print(f"读取到单细胞数据: {sc_data.shape[1]} 基因")
+        print(f"前10个基因ID示例: {list(sc_data.var_names[:10])}")
+        
+        # 从multiome数据提取ATAC信号
+        print("从multiome数据提取ATAC信号...")
+        multiome_file = os.path.join(args.multiome_data_dir, f"{args.multiome_tissue}_multiome_atac_improved_v2.h5ad")
+        if not os.path.exists(multiome_file):
+            print(f"警告: 找不到multiome数据文件: {multiome_file}")
+            return
+        
+        multiome_data = sc.read_h5ad(multiome_file)
+        print(f"读取到multiome数据: {multiome_data.shape[0]} 细胞, {multiome_data.shape[1]} 基因")
+        
+        # 处理数据
+        output_dir = os.path.join(args.output, f"{args.sc_tissue}_sc")
+        os.makedirs(output_dir, exist_ok=True)
+        
         n_samples = convert_sc_with_borrowed_atac(
-            sc_tissue_name=args.sc_tissue,
-            multiome_tissue_name=args.multiome_tissue,
-            output_dir=args.output,
+            sc_data=sc_data,
+            multiome_data=multiome_data,
+            promoter_sequences=promoter_sequences,
+            gene_id_to_transcripts=gene_id_to_transcripts,
+            gene_name_to_transcripts=gene_name_to_transcripts,
+            output_dir=output_dir,
             seq_length=args.seq_length,
             n_folds=args.n_folds,
             random_state=args.random_state,
-            promoter_file=args.promoter_file,
-            promoter_info=args.promoter_info,
-            gene_mapping_file=args.gene_mapping,
-            reference_file=args.reference_file,
             enhance_atac=args.enhance_atac,
             adjust_signal=args.adjust_signal,
             adjust_method=args.adjust_method,
-            sc_data_dir=args.sc_data_dir
+            reference_file=args.reference_file
         )
-        total_samples += n_samples
+        
+        print(f"\n总共处理了 {n_samples} 个样本")
+        print(f"数据已保存到 {args.output}")
     
-    print(f"\n总共处理了 {total_samples} 个样本")
-    print(f"数据已保存到 {args.output}")
     print("处理完成！")
 
 if __name__ == "__main__":
