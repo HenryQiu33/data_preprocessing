@@ -1,0 +1,86 @@
+2025-03-16 13:26:05,743 - INFO - 
+==== ATAC+RNA数据分析工作流 ====
+
+2025-03-16 13:26:05,805 - INFO - 
+使用完整分析模式 - 将处理所有匹配的基因
+
+2025-03-16 13:26:05,805 - INFO - 系统内存: 8.59 GB 总计, 2.40 GB 可用
+2025-03-16 13:26:05,805 - INFO - 内存限制: 80.0% 可用内存
+2025-03-16 13:26:05,805 - INFO - CPU核心数: 8
+2025-03-16 13:26:05,805 - INFO - 使用压缩的基因组注释文件: data/genome/gencode.v47.chr_patch_hapl_scaff.annotation.gtf.gz
+2025-03-16 13:26:05,806 - INFO - 找到pbmc组织的峰注释文件: data/raw/multiome/pbmc/pbmc_atac_peak_annotations.tsv
+2025-03-16 13:26:05,806 - INFO - 找到brain组织的峰注释文件: data/raw/multiome/brain/brain_atac_peak_annotations.tsv
+2025-03-16 13:26:05,806 - INFO - 找到jejunum组织的峰注释文件: data/raw/multiome/jejunum/jejunum_atac_peak_annotations.tsv
+2025-03-16 13:26:05,806 - INFO - 估计内存需求...
+2025-03-16 13:26:05,806 - INFO - 估计内存使用: 47.92 GB
+2025-03-16 13:26:05,806 - INFO - 系统可用内存: 2.40 GB
+2025-03-16 13:26:05,806 - WARNING - 警告: 估计内存使用超过可用内存的90%
+2025-03-16 13:26:05,806 - INFO - 
+进度: [1/4] - 开始处理 pbmc 组织数据
+2025-03-16 13:26:05,806 - INFO - 
+--------------------------------------------------------------------------------
+2025-03-16 13:26:05,806 - INFO - 开始分析 pbmc 组织数据
+2025-03-16 13:26:05,806 - INFO - --------------------------------------------------------------------------------
+2025-03-16 13:26:05,809 - INFO - 检查并创建 pbmc 组织的fragments文件索引...
+2025-03-16 14:00:56,791 - INFO - 保存检查点到: data/processed/checkpoints/pbmc_integrated_20250316_140056.h5ad
+2025-03-16 14:00:57,093 - INFO - 创建了符号链接: data/processed/checkpoints/pbmc_integrated_latest.h5ad -> pbmc_integrated_20250316_140056.h5ad
+2025-03-16 14:00:57,093 - INFO - pbmc 组织数据分析完成
+2025-03-16 14:00:57,093 - INFO - 成功完成 pbmc 组织数据分析
+2025-03-16 14:00:57,093 - INFO - 
+进度: [2/4] - 开始处理 brain 组织数据
+2025-03-16 14:00:57,094 - INFO - 
+--------------------------------------------------------------------------------
+2025-03-16 14:00:57,094 - INFO - 开始分析 brain 组织数据
+2025-03-16 14:00:57,094 - INFO - --------------------------------------------------------------------------------
+2025-03-16 14:00:57,098 - INFO - 检查并创建 brain 组织的fragments文件索引...
+2025-03-16 14:17:08,524 - INFO - 保存检查点到: data/processed/checkpoints/brain_integrated_20250316_141708.h5ad
+2025-03-16 14:17:08,730 - INFO - 创建了符号链接: data/processed/checkpoints/brain_integrated_latest.h5ad -> brain_integrated_20250316_141708.h5ad
+2025-03-16 14:17:08,730 - INFO - brain 组织数据分析完成
+2025-03-16 14:17:08,730 - INFO - 成功完成 brain 组织数据分析
+2025-03-16 14:17:08,730 - INFO - 
+进度: [3/4] - 开始处理 jejunum 组织数据
+2025-03-16 14:17:08,730 - INFO - 
+--------------------------------------------------------------------------------
+2025-03-16 14:17:08,730 - INFO - 开始分析 jejunum 组织数据
+2025-03-16 14:17:08,730 - INFO - --------------------------------------------------------------------------------
+2025-03-16 14:17:08,738 - INFO - 检查并创建 jejunum 组织的fragments文件索引...
+2025-03-16 14:29:51,652 - INFO - 保存检查点到: data/processed/checkpoints/jejunum_integrated_20250316_142951.h5ad
+2025-03-16 14:29:51,867 - INFO - 创建了符号链接: data/processed/checkpoints/jejunum_integrated_latest.h5ad -> jejunum_integrated_20250316_142951.h5ad
+2025-03-16 14:29:51,867 - INFO - jejunum 组织数据分析完成
+2025-03-16 14:29:51,867 - INFO - 成功完成 jejunum 组织数据分析
+2025-03-16 14:29:51,868 - INFO - 
+进度: [4/4] - 开始处理单细胞+ADT数据
+2025-03-16 14:29:51,868 - INFO - 
+=== 开始处理单细胞+ADT数据 ===
+2025-03-16 19:46:42,794 - INFO - 保存检查点到: data/processed/checkpoints/pbmc_sc_adt_20250316_194642.h5ad
+2025-03-16 19:46:42,901 - INFO - 创建了符号链接: data/processed/checkpoints/pbmc_sc_adt_latest.h5ad -> pbmc_sc_adt_20250316_194642.h5ad
+2025-03-16 19:46:42,901 - INFO - 单细胞+ADT数据处理完成
+2025-03-16 19:46:42,904 - INFO - 
+细胞类型汇总已保存到: data/processed/cell_type_summary.csv
+2025-03-16 19:46:42,909 - INFO - 
+=== 细胞类型汇总 ===
+2025-03-16 19:46:42,910 - INFO - dataset               brain  jejunum  pbmc  pbmc_sc
+cell_type                                          
+Astrocyte               433        0     0        0
+B cell                    0        0   499      223
+CD14+ monocyte            0        0  2702      347
+CD4 T cell                0        0  2540     1723
+CD8 T cell                0        0     0      496
+Dendritic cell            0        0     0       26
+Enterocyte                0     1670     0        0
+Enteroendocrine cell      0       62     0        0
+Excitatory neuron       279        0     0        0
+Goblet cell               0      868     0        0
+Inhibitory neuron       134        0     0        0
+Microglia                86        0     0        0
+NK cell                   0        0   745      417
+OPC                     351        0     0        0
+Oligodendrocyte        1770        0     0        0
+Paneth cell               0     3271     0        0
+Stem cell                 0     1119     0        0
+Tuft cell                 0      212     0        0
+2025-03-16 19:46:43,143 - INFO - 细胞类型热图已保存到: data/processed/cell_type_heatmap.png
+2025-03-16 19:46:43,275 - INFO - 细胞类型条形图已保存到: data/processed/cell_type_barplot.png
+2025-03-16 19:46:43,276 - INFO - 分析汇总已保存到: data/processed/analysis_summary.json
+2025-03-16 19:46:43,276 - INFO - 
+总运行时间: 6小时 20分钟 37秒
