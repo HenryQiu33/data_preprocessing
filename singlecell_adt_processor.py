@@ -44,7 +44,10 @@ def process_singlecell_adt_data(h5_file=None, feature_ref_file=None, resolution=
     
     # 设置文件路径
     if h5_file is None:
-        h5_file = 'data/raw/sc/pbmc/feature_bc_matrix.h5'
+        h5_file = '/Users/qiuhongyu/Desktop/scigogogo/jjZhang/reproduce/accessible_seq2exp-main/preprocessing/data/raw/sc/pbmc/5k_Human_PBMC_TotalSeqB_3p_nextgem_5k_Human_PBMC_TotalSeqB_3p_nextgem_count_sample_filtered_feature_bc_matrix.h5'
+    
+    if feature_ref_file is None:
+        feature_ref_file = '/Users/qiuhongyu/Desktop/scigogogo/jjZhang/reproduce/accessible_seq2exp-main/preprocessing/data/raw/sc/pbmc/5k_Human_PBMC_TotalSeqB_3p_nextgem_5k_Human_PBMC_TotalSeqB_3p_nextgem_count_feature_reference.csv'
     
     print(f"读取数据文件: {h5_file}")
     
@@ -579,4 +582,35 @@ def process_singlecell_adt_data(h5_file=None, feature_ref_file=None, resolution=
     elapsed_time = end_time - start_time
     print(f"\n数据处理完成，总用时: {elapsed_time:.2f} 秒")
     
-    return final_data, cell_type_counts 
+    # 保存处理后的数据
+    output_dir = '/Users/qiuhongyu/Desktop/scigogogo/jjZhang/reproduce/accessible_seq2exp-main/preprocessing/data/processed'
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, 'pbmc_sc_processed.h5ad')
+    print(f"\n保存处理后的数据到: {output_file}")
+    final_data.write(output_file)
+    
+    # 确保 adata.X 是一个二维数组
+    if adata.X.ndim == 1:
+        adata.X = adata.X.reshape(-1, 1)
+
+    # 将数据转换为 DataFrame
+    adata_df = pd.DataFrame(adata.X, index=adata.obs_names, columns=adata.var_names[:adata.X.shape[1]])
+
+    # 保存为 CSV 文件
+    csv_output_file = os.path.join(output_dir, 'pbmc_sc_processed.csv')
+    adata_df.to_csv(csv_output_file)
+    print(f"CSV 文件已保存到: {csv_output_file}")
+    
+    return final_data, cell_type_counts
+
+if __name__ == "__main__":
+    import time  # 添加time模块导入
+    print("开始处理单细胞数据...")
+    start_time = time.time()
+    adata, cell_counts = process_singlecell_adt_data()
+    print("\n处理完成！")
+    print("\n细胞类型统计：")
+    for cell_type, count in cell_counts.items():
+        print(f"{cell_type}: {count}")
+    end_time = time.time()
+    print(f"总运行时间: {end_time - start_time:.2f} 秒") 
